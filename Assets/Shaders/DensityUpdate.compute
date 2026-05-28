@@ -1,11 +1,15 @@
-// 役割: 密度フィールドの初期化（Fill）と球状掘削（Drill）を実行する Compute Shader
-// 依存: GpuDrillingSystem.cs から Dispatch される
+// 役割: 密度フィールドの初期化（Fill）・球状掘削（Drill）・ガウシアンぼかし（Blur）を実行する
+// 依存: VoxelDensityField.cs, GpuDrillingSystem.cs から Dispatch される
 
 #pragma kernel CSFill
 #pragma kernel CSDrill
+#pragma kernel CSBlur
 
 // 密度フィールド: 1.0=金属、0.0=空洞
 RWStructuredBuffer<float> _DensityField;
+
+// Blur 用一時バッファ（ping-pong）
+RWStructuredBuffer<float> _DensityBlurTemp;
 
 int   _Resolution;    // 1辺のボクセル数（例: 64）
 
@@ -24,10 +28,74 @@ void CSFill(uint3 id : SV_DispatchThreadID)
     _DensityField[idx] = isBoundary ? 0.0f : 1.0f;
 }
 
-// ----- 掘削カーネル: ドリル先端中心から球状に密度を削る -----
+// ----- ガウシアン Blur カーネル: 密度フィールドを6近傍平均で平滑化（ping-pong方式）-----
+// _DensityField から読み、_DensityBlurTemp へ書く。C# 側でバッファをスワップして繰り返す。
+[numthreads(8, 8, 8)]
+void CSBlur(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution || id.z >= (uint)_Resolution)
+        return;
+
+    int x = (int)id.x, y = (int)id.y, z = (int)id.z;
+    int idx = x + y * _Resolution + z * _Resolution * _Resolution;
+
+    // 境界ボクセルはそのままコピー（density=0 で固定）
+    uint R1 = (uint)_Resolution - 1u;
+    if (id.x == 0u || id.y == 0u || id.z == 0u || id.x == R1 || id.y == R1 || id.z == R1)
+    {
+        _DensityBlurTemp[idx] = _DensityField[idx];
+        return;
+    }
+
+    // 中心×2 + 6近傍×1 の加重平均（合計8で割る）
+    float v = _DensityField[idx] * 2.0f;
+    v += _DensityField[(x+1) + y * _Resolution + z * _Resolution * _Resolution];
+    v += _DensityField[(x-1) + y * _Resolution + z * _Resolution * _Resolution];
+    v += _DensityField[x + (y+1) * _Resolution + z * _Resolution * _Resolution];
+    v += _DensityField[x + (y-1) * _Resolution + z * _Resolution * _Resolution];
+    v += _DensityField[x + y * _Resolution + (z+1) * _Resolution * _Resolution];
+    v += _DensityField[x + y * _Resolution + (z-1) * _Resolution * _Resolution];
+    _DensityBlurTemp[idx] = v / 8.0f;
+}
+
+// ----- 掘削カーネル: 工具形状 SDF に基づいて密度を削る -----
 float3 _DrillPosVoxel;  // ドリル先端のボクセル座標（0〜Resolution）
+float3 _DrillAxisVoxel; // 先端→胴体方向（正規化済み、ボクセル空間）
 float  _DrillRadius;    // 掘削半径（ボクセル単位）
+float  _DrillLength;    // 工具切削長（ボクセル単位）
 float  _DrillStrength;  // 1Dispatch で削る密度量（dt 分加算済み）
+int    _ToolShape;      // 0=球, 1=カプセル, 2=エンドミル, 3=コーン
+
+// 工具形状の内側度を返す（>0=内側, <=0=外側）
+float ToolFalloff(float3 P)
+{
+    float3 offset = P - _DrillPosVoxel;
+    float  r      = max(_DrillRadius, 0.001f);
+    float  L      = max(_DrillLength, 0.001f);
+
+    if (_ToolShape == 0) // 球（ボールエンドミル）
+    {
+        return 1.0f - length(offset) / r;
+    }
+    else if (_ToolShape == 1) // カプセル（球先端 + 円柱胴体）
+    {
+        float t = clamp(dot(offset, _DrillAxisVoxel), 0.0f, _DrillLength);
+        return 1.0f - length(offset - _DrillAxisVoxel * t) / r;
+    }
+    else if (_ToolShape == 2) // エンドミル（平底円柱）
+    {
+        float t = dot(offset, _DrillAxisVoxel);
+        if (t < 0.0f || t > _DrillLength) return -1.0f;
+        return 1.0f - length(offset - _DrillAxisVoxel * t) / r;
+    }
+    else // コーン（V字刃）
+    {
+        float t = dot(offset, _DrillAxisVoxel);
+        if (t < 0.0f || t > _DrillLength) return -1.0f;
+        float coneR = r * t / L;
+        return 1.0f - length(offset - _DrillAxisVoxel * t) / max(coneR, 0.001f);
+    }
+}
 
 [numthreads(8, 8, 8)]
 void CSDrill(uint3 id : SV_DispatchThreadID)
@@ -35,13 +103,11 @@ void CSDrill(uint3 id : SV_DispatchThreadID)
     if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution || id.z >= (uint)_Resolution)
         return;
 
-    float3 pos  = float3((float)id.x, (float)id.y, (float)id.z);
-    float  dist = length(pos - _DrillPosVoxel);
-
-    if (dist <= _DrillRadius)
+    float3 P      = float3((float)id.x, (float)id.y, (float)id.z);
+    float falloff = ToolFalloff(P);
+    if (falloff > 0.0f)
     {
         int idx = id.x + id.y * _Resolution + id.z * _Resolution * _Resolution;
-        float falloff = 1.0f - saturate(dist / max(_DrillRadius, 0.001f));
         _DensityField[idx] = max(0.0f, _DensityField[idx] - _DrillStrength * falloff);
     }
 }

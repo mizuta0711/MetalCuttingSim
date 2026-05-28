@@ -14,6 +14,8 @@ namespace MetalCuttingSim
         [Header("Dropdowns")]
         [SerializeField] private Dropdown resolutionDropdown;
         [SerializeField] private Dropdown chunkSizeDropdown;
+        [SerializeField] private Dropdown toolShapeDropdown;
+        [SerializeField] private Text     toolShapeLabel;
 
         [Header("Sliders + Labels")]
         [SerializeField] private Slider drillRadiusSlider;
@@ -73,6 +75,22 @@ namespace MetalCuttingSim
                 chunkSizeDropdown.AddOptions(opts);
                 chunkSizeDropdown.onValueChanged.AddListener(OnChunkSizeChanged);
             }
+
+            if (toolShapeDropdown != null)
+            {
+                toolShapeDropdown.ClearOptions();
+                var opts = new System.Collections.Generic.List<Dropdown.OptionData>
+                {
+                    new Dropdown.OptionData("球 (Ball)"),
+                    new Dropdown.OptionData("カプセル (Drill)"),
+                    new Dropdown.OptionData("エンドミル (Flat)"),
+                    new Dropdown.OptionData("コーン (V-Bit)"),
+                };
+                toolShapeDropdown.AddOptions(opts);
+                toolShapeDropdown.value = (int)parameters.toolShape;
+                toolShapeDropdown.onValueChanged.AddListener(OnToolShapeChanged);
+            }
+            if (toolShapeLabel != null) toolShapeLabel.text = "工具形状";
         }
 
         void SetupSliders()
@@ -115,6 +133,8 @@ namespace MetalCuttingSim
             parameters.chunkSize = cs;
             mcRenderer.Rebuild();
         }
+
+        void OnToolShapeChanged(int idx) => parameters.toolShape = (ToolShape)idx;
 
         void UpdateLabel(Text label, string name, float val)
         {

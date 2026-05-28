@@ -10,7 +10,8 @@ namespace MetalCuttingSim
         [SerializeField] private CuttingParameters parameters;
         [SerializeField] private ComputeShader densityShader;
 
-        public ComputeBuffer DensityBuffer { get; private set; }
+        public ComputeBuffer DensityBuffer    { get; private set; }
+        public ComputeBuffer BlurTempBuffer  { get; private set; }
         public int Resolution  => parameters.fieldResolution;
         public int ChunkDim    => parameters.ChunkDim;
         public int TotalChunks => parameters.TotalChunks;
@@ -22,18 +23,25 @@ namespace MetalCuttingSim
         private bool[]   _dirtyFlags;
         private Queue<int> _dirtyQueue = new Queue<int>();
         private int _kernelFill;
+        private int _kernelBlur;
+
+        [SerializeField] private int blurIterations = 3;
 
         void Awake() => Initialize();
 
         public void Initialize()
         {
             _kernelFill = densityShader.FindKernel("CSFill");
+            _kernelBlur = densityShader.FindKernel("CSBlur");
 
             DensityBuffer?.Release();
+            BlurTempBuffer?.Release();
             int total = parameters.fieldResolution * parameters.fieldResolution * parameters.fieldResolution;
-            DensityBuffer = new ComputeBuffer(total, sizeof(float));
+            DensityBuffer   = new ComputeBuffer(total, sizeof(float));
+            BlurTempBuffer  = new ComputeBuffer(total, sizeof(float));
 
             FillDensity();
+            ApplyBlur(blurIterations);
             InitChunkTracking();
 
             Debug.Log($"[VoxelDensityField] 初期化完了。" +
@@ -48,6 +56,24 @@ namespace MetalCuttingSim
             densityShader.SetInt("_Resolution", res);
             int g = Mathf.CeilToInt(res / 8f);
             densityShader.Dispatch(_kernelFill, g, g, g);
+        }
+
+        // 6近傍加重平均 blur を ping-pong で n 回適用
+        // 初期化時に呼ぶことでブロック外面の段差をなめらかにする
+        public void ApplyBlur(int iterations)
+        {
+            if (iterations <= 0) return;
+            int res = parameters.fieldResolution;
+            int g   = Mathf.CeilToInt(res / 8f);
+            densityShader.SetInt("_Resolution", res);
+            for (int i = 0; i < iterations; i++)
+            {
+                densityShader.SetBuffer(_kernelBlur, "_DensityField",    DensityBuffer);
+                densityShader.SetBuffer(_kernelBlur, "_DensityBlurTemp", BlurTempBuffer);
+                densityShader.Dispatch(_kernelBlur, g, g, g);
+                // 結果を DensityBuffer に戻すためバッファ参照をスワップ
+                (DensityBuffer, BlurTempBuffer) = (BlurTempBuffer, DensityBuffer);
+            }
         }
 
         void InitChunkTracking()
@@ -93,6 +119,10 @@ namespace MetalCuttingSim
             return new Vector3Int(cx, cy, cz) * parameters.chunkSize;
         }
 
-        void OnDestroy() => DensityBuffer?.Release();
+        void OnDestroy()
+        {
+            DensityBuffer?.Release();
+            BlurTempBuffer?.Release();
+        }
     }
 }

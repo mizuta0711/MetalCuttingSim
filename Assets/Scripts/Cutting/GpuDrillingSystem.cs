@@ -49,16 +49,28 @@ namespace MetalCuttingSim
             float radiusVoxel = parameters.drillRadius;
             float strength    = parameters.drillStrength * Time.deltaTime;
 
+            // 先端→胴体方向（isotropic ボクセルなのでワールド方向 = ボクセル方向）
+            Vector3 axisWorld = Vector3.back;
+            if (drillTip != null)
+                axisWorld = (drillController.transform.position - drillTip.position).normalized;
+
             densityShader.SetBuffer(_kernelDrill, "_DensityField", densityField.DensityBuffer);
-            densityShader.SetInt("_Resolution",       res);
-            densityShader.SetVector("_DrillPosVoxel", drillVoxel);
-            densityShader.SetFloat("_DrillRadius",    radiusVoxel);
-            densityShader.SetFloat("_DrillStrength",  strength);
+            densityShader.SetInt("_Resolution",          res);
+            densityShader.SetVector("_DrillPosVoxel",    drillVoxel);
+            densityShader.SetVector("_DrillAxisVoxel",   axisWorld);
+            densityShader.SetFloat("_DrillRadius",       radiusVoxel);
+            densityShader.SetFloat("_DrillLength",       parameters.drillLength);
+            densityShader.SetFloat("_DrillStrength",     strength);
+            densityShader.SetInt("_ToolShape",           (int)parameters.toolShape);
 
             int g = Mathf.CeilToInt(res / 8f);
             densityShader.Dispatch(_kernelDrill, g, g, g);
 
-            MarkDirtyChunks(drillVoxel, radiusVoxel);
+            // 非球形状はドリル長さ分だけ dirty 範囲を拡げる
+            float effectiveRadius = radiusVoxel;
+            if (parameters.toolShape != ToolShape.Sphere)
+                effectiveRadius += parameters.drillLength;
+            MarkDirtyChunks(drillVoxel, effectiveRadius);
 
             // HUD: 除去体積概算（球体積 × strength）
             LastRemovedVolume = (4f / 3f) * Mathf.PI * Mathf.Pow(radiusVoxel, 3f) * strength;

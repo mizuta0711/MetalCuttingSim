@@ -4,9 +4,14 @@ using UnityEngine;
 
 namespace MetalCuttingSim
 {
+    public enum ToolShape { Sphere = 0, Capsule = 1, FlatEndMill = 2, Cone = 3 }
+
     [CreateAssetMenu(fileName = "CuttingParameters", menuName = "MetalCuttingSim/CuttingParameters")]
     public class CuttingParameters : ScriptableObject
     {
+        [Header("工具形状")]
+        public ToolShape toolShape   = ToolShape.Sphere;
+
         [Header("密度フィールド")]
         public int   fieldResolution = 64;      // 全体解像度（chunkSize の倍数であること）
         public float fieldWorldSize  = 2.0f;    // ワールド空間でのブロックサイズ（m）
