@@ -11,7 +11,7 @@ namespace MetalCuttingSim
         [SerializeField] private float distance      = 5f;
         // 画面幅を1とした時の感度。1.0 = 画面端まで動かすと360度回転
         [SerializeField] private float orbitSensitivity = 0.25f;
-        [SerializeField] private float zoomSpeed         = 0.01f;   // m per scroll unit (120 = 1 notch)
+        [SerializeField] private float zoomSpeed         = 0.002f;  // m per scroll unit (120 = 1 notch)
         [SerializeField] private float minDistance   = 0.5f;
         [SerializeField] private float maxDistance   = 15f;
 

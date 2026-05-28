@@ -32,8 +32,8 @@ Shader "MetalCuttingSim/MetalSurface"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            // Triangle は ComputeShader と同じレイアウト（36 bytes）
-            struct MCSTriangle { float3 v0, v1, v2; };
+            // Triangle は ComputeShader と同じレイアウト（72 bytes: 頂点×3 + 勾配法線×3）
+            struct MCSTriangle { float3 v0, n0, v1, n1, v2, n2; };
 
             // StructuredBuffer は CBUFFER 外（MaterialPropertyBlock でセット可能）
             StructuredBuffer<MCSTriangle> _Triangles;
@@ -57,19 +57,20 @@ Shader "MetalCuttingSim/MetalSurface"
                 uint li = vid % 3u;
                 MCSTriangle t = _Triangles[ti];
 
-                // v1/v2 を入れ替えて巻き順を反転（triTable は外向き法線を生成しない規則のため）
-                float3 posWS;
-                if      (li == 0u) posWS = t.v0;
-                else if (li == 1u) posWS = t.v2;
-                else               posWS = t.v1;
+                // v1/v2 を入れ替えて巻き順を外向きに修正。法線も同じ順で対応させる
+                float3 posWS, nrm;
+                if      (li == 0u) { posWS = t.v0; nrm = t.n0; }
+                else if (li == 1u) { posWS = t.v2; nrm = t.n2; }
+                else               { posWS = t.v1; nrm = t.n1; }
 
-                // 反転した巻き順に合わせた法線（外向き）
-                float3 n = normalize(cross(t.v2 - t.v0, t.v1 - t.v0));
+                // 面法線（v1↔v2 反転済みの外向き基準）と勾配法線が逆向きならフリップ
+                float3 faceN = normalize(cross(t.v2 - t.v0, t.v1 - t.v0));
+                if (dot(nrm, faceN) < 0.0) nrm = -nrm;
 
                 Varyings o;
                 o.posCS  = TransformWorldToHClip(posWS);
                 o.posWS  = posWS;
-                o.normal = n;
+                o.normal = nrm;
                 return o;
             }
 
@@ -92,7 +93,7 @@ Shader "MetalCuttingSim/MetalSurface"
 
                 // DrawProceduralIndirect は per-object SH 係数が未設定のため SampleSH() が 0 を返す。
                 // 代わりに固定アンビエントフロアを使用して全方向から見えるようにする。
-                half3  ambient = _BaseColor.rgb * 0.45h;
+                half3  ambient = _BaseColor.rgb * 0.6h;
                 half3  color   = diffuse + ambient;
 
                 return half4(color, 1.0h);
@@ -116,7 +117,7 @@ Shader "MetalCuttingSim/MetalSurface"
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-            struct MCSTriangle { float3 v0, v1, v2; };
+            struct MCSTriangle { float3 v0, n0, v1, n1, v2, n2; };
             StructuredBuffer<MCSTriangle> _Triangles;
 
             float4 vertShadow(uint vid : SV_VertexID) : SV_POSITION
@@ -125,7 +126,6 @@ Shader "MetalCuttingSim/MetalSurface"
                 uint li = vid % 3u;
                 MCSTriangle t = _Triangles[ti];
                 float3 posWS;
-                // ForwardLit パスと同じ巻き順（v1/v2 反転）
                 if      (li == 0u) posWS = t.v0;
                 else if (li == 1u) posWS = t.v2;
                 else               posWS = t.v1;

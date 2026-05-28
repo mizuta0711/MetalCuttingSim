@@ -17,16 +17,16 @@ namespace MetalCuttingSim
             if (kb == null) return;
 
             float moveZ = 0f;
-            if (kb.wKey.isPressed || kb.upArrowKey.isPressed)    moveZ =  1f;
-            if (kb.sKey.isPressed || kb.downArrowKey.isPressed)  moveZ = -1f;
+            if (kb.wKey.isPressed) moveZ =  1f;
+            if (kb.sKey.isPressed) moveZ = -1f;
 
             float moveX = 0f;
             if (kb.aKey.isPressed || kb.leftArrowKey.isPressed)  moveX = -1f;
             if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) moveX =  1f;
 
             float moveY = 0f;
-            if (kb.qKey.isPressed) moveY =  1f;
-            if (kb.eKey.isPressed) moveY = -1f;
+            if (kb.qKey.isPressed || kb.upArrowKey.isPressed)   moveY =  1f;
+            if (kb.eKey.isPressed || kb.downArrowKey.isPressed) moveY = -1f;
 
             transform.Translate(
                 new Vector3(moveX, moveY, moveZ) * moveSpeed * Time.deltaTime,

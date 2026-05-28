@@ -29,7 +29,7 @@ namespace MetalCuttingSim
         private Bounds _bounds;
         private bool _startupDone;
 
-        const int TRIANGLE_STRIDE = 36;
+        const int TRIANGLE_STRIDE = 72;
 
         void Awake()
         {
