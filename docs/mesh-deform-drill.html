@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>メッシュ変形デモ — 頂点変位方式</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap');
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  :root{
+    --bg:#0d0f0e;
+    --panel:#15191a;
+    --line:#232a2b;
+    --acid:#b6ff3d;
+    --acid-dim:#6f9e1f;
+    --cyan:#3de0ff;
+    --txt:#e8efe8;
+    --txt-dim:#677470;
+    --grid:#1a2120;
+  }
+
+  html,body{ height:100%; background:var(--bg); color:var(--txt);
+    font-family:'Space Mono',monospace; overflow:hidden; }
+  #app{ position:fixed; inset:0; }
+  canvas{ display:block; }
+
+  .header{
+    position:absolute; top:0; left:0; right:0; padding:20px 28px;
+    display:flex; align-items:baseline; gap:18px; z-index:10; pointer-events:none;
+    background:linear-gradient(180deg, rgba(13,15,14,.92), transparent);
+  }
+  .title{ font-family:'Bebas Neue',sans-serif; font-size:34px; letter-spacing:3px; }
+  .title .v{ color:var(--acid); }
+  .sub{ font-size:11px; color:var(--txt-dim); letter-spacing:2px; }
+
+  .panel{
+    position:absolute; background:rgba(21,25,26,.85); border:1px solid var(--line);
+    border-radius:5px; backdrop-filter:blur(8px); z-index:10;
+  }
+  .info{ top:84px; left:28px; width:250px; padding:16px 18px; }
+  .info h3,.ctrls h3{ font-size:10px; letter-spacing:2.5px; text-transform:uppercase;
+    color:var(--acid); margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid var(--line); }
+  .row{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:9px; }
+  .row .l{ font-size:11px; color:var(--txt-dim); }
+  .row .n{ font-size:15px; font-weight:700; }
+  .row .u{ font-size:10px; color:var(--txt-dim); margin-left:3px; }
+  .note{ font-size:10px; line-height:1.6; color:var(--txt-dim); margin-top:12px;
+    padding-top:12px; border-top:1px solid var(--line); }
+  .note b{ color:var(--cyan); }
+
+  .ctrls{ top:84px; right:28px; width:250px; padding:16px 18px; }
+  .ctrl{ margin-bottom:15px; }
+  .ctrl label{ font-size:11px; color:var(--txt-dim); display:flex; justify-content:space-between; margin-bottom:6px; }
+  .ctrl label b{ color:var(--txt); font-weight:700; }
+  input[type=range]{ -webkit-appearance:none; appearance:none; width:100%; height:4px;
+    background:var(--grid); border-radius:2px; outline:none; }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none;
+    width:14px; height:14px; border-radius:50%; background:var(--acid); cursor:pointer; border:2px solid var(--bg); }
+  input[type=range]::-moz-range-thumb{ width:14px; height:14px; border-radius:50%;
+    background:var(--acid); cursor:pointer; border:2px solid var(--bg); }
+  .seg{ display:flex; gap:6px; margin-bottom:15px; }
+  .seg button{ flex:1; padding:8px 4px; background:transparent; border:1px solid var(--line);
+    border-radius:3px; color:var(--txt-dim); font-family:inherit; font-size:10px;
+    letter-spacing:.5px; cursor:pointer; transition:all .15s; }
+  .seg button.on{ border-color:var(--acid); color:var(--acid); background:rgba(182,255,61,.08); }
+  .btn{ width:100%; padding:9px; background:transparent; border:1px solid var(--line);
+    border-radius:3px; color:var(--txt); font-family:inherit; font-size:11px; letter-spacing:1px;
+    text-transform:uppercase; cursor:pointer; transition:all .15s; }
+  .btn:hover{ border-color:var(--acid); color:var(--acid); }
+
+  .hint{ position:absolute; bottom:24px; left:50%; transform:translateX(-50%); z-index:10;
+    font-size:11px; color:var(--txt-dim); letter-spacing:1px; background:rgba(21,25,26,.7);
+    padding:9px 20px; border-radius:20px; border:1px solid var(--line); }
+  .hint b{ color:var(--acid); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="header">
+  <div class="title">MESH<span class="v">/</span>DEFORM</div>
+  <div class="sub">VERTEX DISPLACEMENT METHOD — DEMO</div>
+</div>
+
+<div class="panel info">
+  <h3>メッシュ情報</h3>
+  <div class="row"><span class="l">頂点数</span><span><span class="n" id="verts">0</span><span class="u">pts</span></span></div>
+  <div class="row"><span class="l">変位した頂点</span><span><span class="n" id="moved">0</span><span class="u">pts</span></span></div>
+  <div class="row"><span class="l">最大変位深さ</span><span><span class="n" id="depth">0.00</span><span class="u">mm</span></span></div>
+  <div class="row"><span class="l">押込み力</span><span><span class="n" id="force">0</span><span class="u">N</span></span></div>
+  <div class="note">
+    この方式は<b>表面メッシュの頂点を直接へこませる</b>だけ。削っていない間はコストゼロ。
+    ただし頂点間より細かい形や貫通は表現できない（位相が変わらない）のが弱点。
+  </div>
+</div>
+
+<div class="panel ctrls">
+  <h3>工具パラメータ</h3>
+  <div class="seg">
+    <button id="mPress" class="on">押込み変形</button>
+    <button id="mGouge">えぐり変形</button>
+  </div>
+  <div class="ctrl">
+    <label>工具半径 <b><span id="radV">3.0</span></b></label>
+    <input type="range" id="rad" min="1" max="8" step="0.5" value="3.0">
+  </div>
+  <div class="ctrl">
+    <label>押込み速度 <b><span id="feedV">1.0</span></b></label>
+    <input type="range" id="feed" min="0.3" max="3" step="0.1" value="1.0">
+  </div>
+  <div class="ctrl">
+    <label>メッシュ解像度 <b><span id="resV">80</span>分割</b></label>
+    <input type="range" id="res" min="30" max="140" step="10" value="80">
+  </div>
+  <button class="btn" id="reset">板を再生成 / RESET</button>
+</div>
+
+<div class="hint">マウス<b>ドラッグ</b>で視点 · <b>ホイール</b>でズーム · 板の上で<b>左クリック長押し</b>して削る</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+const app = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0f0e);
+scene.fog = new THREE.Fog(0x0d0f0e, 60, 130);
+
+const camera = new THREE.PerspectiveCamera(48, innerWidth/innerHeight, 0.1, 300);
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+// ライティング
+scene.add(new THREE.AmbientLight(0x3a4540, 0.7));
+const key = new THREE.DirectionalLight(0xffffff, 1.5);
+key.position.set(20, 34, 16);
+key.castShadow = true;
+key.shadow.mapSize.set(2048,2048);
+key.shadow.camera.left=-40; key.shadow.camera.right=40;
+key.shadow.camera.top=40; key.shadow.camera.bottom=-40;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xb6ff3d, 0.35);
+rim.position.set(-18,8,-20); scene.add(rim);
+
+const grid = new THREE.GridHelper(120,48,0x232a2b,0x161c1b);
+grid.position.y=-14; scene.add(grid);
+
+// ---------------------------------------------------------------------------
+// 金属板（Plane）— ここを頂点変位で削る
+//   PlaneGeometryをXZ平面に寝かせ、Y方向にへこませる
+// ---------------------------------------------------------------------------
+const PLATE = 40;          // 一辺のワールドサイズ
+let SEG = 80;              // 分割数（頂点解像度）
+let plate, baseY = 0;
+let origPos;               // 初期の頂点Y（戻し計算用）
+
+const plateMat = new THREE.MeshStandardMaterial({
+  color:0x9aa4a0, metalness:0.9, roughness:0.35,
+  side:THREE.DoubleSide, flatShading:false,
+});
+
+function buildPlate(){
+  if(plate){ scene.remove(plate); plate.geometry.dispose(); }
+  const geo = new THREE.PlaneGeometry(PLATE, PLATE, SEG, SEG);
+  geo.rotateX(-Math.PI/2);          // 水平に寝かせる
+  plate = new THREE.Mesh(geo, plateMat);
+  plate.castShadow = true; plate.receiveShadow = true;
+  scene.add(plate);
+  origPos = Float32Array.from(geo.attributes.position.array);
+  movedSet = new Set();
+  maxDepth = 0;
+  ui.verts.textContent = geo.attributes.position.count;
+}
+
+// ---------------------------------------------------------------------------
+// ドリル工具
+// ---------------------------------------------------------------------------
+const drill = new THREE.Group();
+const bitMat = new THREE.MeshStandardMaterial({ color:0x262b2c, metalness:0.95, roughness:0.25 });
+const body = new THREE.Mesh(new THREE.CylinderGeometry(1.2,1.2,12,28), bitMat);
+const tip  = new THREE.Mesh(new THREE.ConeGeometry(1.2,2.6,28), bitMat);
+tip.position.y = -7.3;
+drill.add(body, tip);
+drill.position.set(0, 12, 0);
+scene.add(drill);
+
+// 削り粉パーティクル
+const CHIP=80;
+const chipGeo=new THREE.BufferGeometry();
+const chipPos=new Float32Array(CHIP*3);
+const chipVel=new Float32Array(CHIP*3);
+const chipLife=new Float32Array(CHIP);
+chipGeo.setAttribute('position',new THREE.BufferAttribute(chipPos,3));
+const chips=new THREE.Points(chipGeo,new THREE.PointsMaterial({color:0xb6ff3d,size:0.35,transparent:true,opacity:0.85}));
+scene.add(chips);
+function emitChip(p){
+  for(let k=0;k<2;k++){
+    const i=(Math.random()*CHIP)|0;
+    chipPos[i*3]=p.x; chipPos[i*3+1]=p.y+0.5; chipPos[i*3+2]=p.z;
+    chipVel[i*3]=(Math.random()-0.5)*0.5; chipVel[i*3+1]=Math.random()*0.4+0.2; chipVel[i*3+2]=(Math.random()-0.5)*0.5;
+    chipLife[i]=1;
+  }
+}
+function stepChips(){
+  for(let i=0;i<CHIP;i++) if(chipLife[i]>0){
+    chipLife[i]-=0.035;
+    chipPos[i*3]+=chipVel[i*3]; chipPos[i*3+1]+=chipVel[i*3+1]; chipPos[i*3+2]+=chipVel[i*3+2];
+    chipVel[i*3+1]-=0.025;
+    if(chipLife[i]<=0) chipPos[i*3+1]=9999;
+  }
+  chipGeo.attributes.position.needsUpdate=true;
+}
+
+// ---------------------------------------------------------------------------
+// パラメータ & UI
+// ---------------------------------------------------------------------------
+const P={ rad:3.0, feed:1.0, mode:'press' };
+let movedSet=new Set(), maxDepth=0, force=0;
+
+const ui={
+  rad:document.getElementById('rad'), feed:document.getElementById('feed'), res:document.getElementById('res'),
+  radV:document.getElementById('radV'), feedV:document.getElementById('feedV'), resV:document.getElementById('resV'),
+  verts:document.getElementById('verts'), moved:document.getElementById('moved'),
+  depth:document.getElementById('depth'), force:document.getElementById('force'),
+};
+ui.rad.oninput=e=>{P.rad=+e.target.value; ui.radV.textContent=P.rad.toFixed(1);};
+ui.feed.oninput=e=>{P.feed=+e.target.value; ui.feedV.textContent=P.feed.toFixed(1);};
+ui.res.oninput=e=>{ui.resV.textContent=e.target.value;};
+ui.res.onchange=e=>{ SEG=+e.target.value; buildPlate(); };
+document.getElementById('reset').onclick=()=>buildPlate();
+
+const mPress=document.getElementById('mPress'), mGouge=document.getElementById('mGouge');
+mPress.onclick=()=>{P.mode='press'; mPress.classList.add('on'); mGouge.classList.remove('on');};
+mGouge.onclick=()=>{P.mode='gouge'; mGouge.classList.add('on'); mPress.classList.remove('on');};
+
+// ---------------------------------------------------------------------------
+// 掘削：レイキャストで板上の点を取り、周囲の頂点をへこませる
+// ---------------------------------------------------------------------------
+const raycaster=new THREE.Raycaster();
+const mouseNDC=new THREE.Vector2();
+let cutting=false, hitPoint=null;
+
+renderer.domElement.addEventListener('mousedown', e=>{
+  if(e.button===0 && !e.shiftKey){ updateHit(e); if(hitPoint){ cutting=true; e.stopPropagation(); } }
+});
+addEventListener('mouseup', ()=>cutting=false);
+renderer.domElement.addEventListener('mousemove', e=>{ if(cutting) updateHit(e); });
+
+function updateHit(e){
+  mouseNDC.x=(e.clientX/innerWidth)*2-1;
+  mouseNDC.y=-(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(mouseNDC, camera);
+  const hit=raycaster.intersectObject(plate,false)[0];
+  hitPoint = hit ? hit.point.clone() : null;
+}
+
+function deform(){
+  if(!hitPoint) return;
+  const pos=plate.geometry.attributes.position;
+  const arr=pos.array;
+  const cx=hitPoint.x, cz=hitPoint.z;
+  const r=P.rad, step=P.feed*0.18;
+  let touched=0;
+  for(let i=0;i<pos.count;i++){
+    const ix=i*3;
+    const vx=arr[ix], vz=arr[ix+2];
+    const d=Math.hypot(vx-cx, vz-cz);
+    if(d<r){
+      // 釣鐘状のへこみプロファイル
+      const fall=0.5*(1+Math.cos(Math.PI*d/r));   // 中心1→縁0
+      let push;
+      if(P.mode==='press'){
+        push = step*fall;                          // なだらかに押す
+      } else {
+        push = step*Math.pow(fall,2.2)*1.6;        // 鋭くえぐる
+      }
+      arr[ix+1] -= push;
+      // 削りすぎ防止のクランプ
+      if(arr[ix+1] < -10) arr[ix+1] = -10;
+      movedSet.add(i);
+      maxDepth = Math.max(maxDepth, origPos[ix+1]-arr[ix+1]);
+      touched++;
+    }
+  }
+  if(touched>0){
+    pos.needsUpdate=true;
+    plate.geometry.computeVertexNormals();   // 陰影を正しく
+    emitChip(hitPoint);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// カメラ操作（簡易オービット）— 板上ドラッグと競合しないようShift or 空白部
+// ---------------------------------------------------------------------------
+let camR=46, camTheta=0.9, camPhi=0.95, dragging=false, lx=0, ly=0;
+function updateCam(){
+  camera.position.set(
+    camR*Math.sin(camPhi)*Math.cos(camTheta),
+    camR*Math.cos(camPhi),
+    camR*Math.sin(camPhi)*Math.sin(camTheta)
+  );
+  camera.lookAt(0,-2,0);
+}
+renderer.domElement.addEventListener('mousedown', e=>{
+  // 板にヒットしない、またはShift押下時はカメラ回転
+  updateHit(e);
+  if(e.shiftKey || !hitPoint){ dragging=true; lx=e.clientX; ly=e.clientY; cutting=false; }
+});
+addEventListener('mouseup', ()=>dragging=false);
+addEventListener('mousemove', e=>{
+  if(!dragging) return;
+  camTheta-=(e.clientX-lx)*0.008;
+  camPhi=Math.max(0.15,Math.min(1.45,camPhi-(e.clientY-ly)*0.008));
+  lx=e.clientX; ly=e.clientY;
+});
+renderer.domElement.addEventListener('wheel', e=>{
+  camR=Math.max(22,Math.min(95,camR+e.deltaY*0.03)); e.preventDefault();
+},{passive:false});
+
+// ---------------------------------------------------------------------------
+// メインループ
+// ---------------------------------------------------------------------------
+let spin=0;
+function animate(){
+  requestAnimationFrame(animate);
+  spin+=0.5; body.rotation.y=spin; tip.rotation.y=spin;
+
+  // ドリルをヒット点へ追従＆押込み表現
+  if(cutting && hitPoint){
+    drill.position.x += (hitPoint.x-drill.position.x)*0.4;
+    drill.position.z += (hitPoint.z-drill.position.z)*0.4;
+    const targetY = hitPoint.y + 7.3;          // 先端を板面へ
+    drill.position.y += (targetY-drill.position.y)*0.3;
+    deform();
+    force += ((40+P.feed*120+P.rad*15)-force)*0.15;
+  } else {
+    drill.position.y += (12-drill.position.y)*0.08;  // 持ち上げ
+    force += (0-force)*0.12;
+  }
+
+  stepChips();
+
+  ui.moved.textContent = movedSet.size;
+  ui.depth.textContent = maxDepth.toFixed(2);
+  ui.force.textContent = Math.round(force);
+
+  updateCam();
+  renderer.render(scene,camera);
+}
+
+buildPlate();
+updateCam();
+animate();
+
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>

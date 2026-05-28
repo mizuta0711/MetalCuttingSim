@@ -1,0 +1,47 @@
+// 役割: 密度フィールドの初期化（Fill）と球状掘削（Drill）を実行する Compute Shader
+// 依存: GpuDrillingSystem.cs から Dispatch される
+
+#pragma kernel CSFill
+#pragma kernel CSDrill
+
+// 密度フィールド: 1.0=金属、0.0=空洞
+RWStructuredBuffer<float> _DensityField;
+
+int   _Resolution;    // 1辺のボクセル数（例: 64）
+
+// ----- 初期化カーネル: 内部ボクセルを 1.0（金属）、境界ボクセルを 0.0（空気）で埋める -----
+// 境界を 0.0 にすることで Marching Cubes が等値面（金属表面）を生成できる
+[numthreads(8, 8, 8)]
+void CSFill(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution || id.z >= (uint)_Resolution)
+        return;
+
+    int idx = id.x + id.y * _Resolution + id.z * _Resolution * _Resolution;
+    uint R1 = (uint)_Resolution - 1u;
+    bool isBoundary = (id.x == 0u || id.y == 0u || id.z == 0u ||
+                       id.x == R1  || id.y == R1  || id.z == R1);
+    _DensityField[idx] = isBoundary ? 0.0f : 1.0f;
+}
+
+// ----- 掘削カーネル: ドリル先端中心から球状に密度を削る -----
+float3 _DrillPosVoxel;  // ドリル先端のボクセル座標（0〜Resolution）
+float  _DrillRadius;    // 掘削半径（ボクセル単位）
+float  _DrillStrength;  // 1Dispatch で削る密度量（dt 分加算済み）
+
+[numthreads(8, 8, 8)]
+void CSDrill(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution || id.z >= (uint)_Resolution)
+        return;
+
+    float3 pos  = float3((float)id.x, (float)id.y, (float)id.z);
+    float  dist = length(pos - _DrillPosVoxel);
+
+    if (dist <= _DrillRadius)
+    {
+        int idx = id.x + id.y * _Resolution + id.z * _Resolution * _Resolution;
+        float falloff = 1.0f - saturate(dist / max(_DrillRadius, 0.001f));
+        _DensityField[idx] = max(0.0f, _DensityField[idx] - _DrillStrength * falloff);
+    }
+}

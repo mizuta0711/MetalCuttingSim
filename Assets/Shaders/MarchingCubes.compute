@@ -1,0 +1,124 @@
+// 役割: 密度フィールドからチャンク単位で GPU Marching Cubes を実行し三角形を生成する
+// 依存: MarchingCubesTables.cginc
+
+#pragma kernel CSMarchingCubes
+#pragma kernel CSFillIndirectArgs
+
+#include "MarchingCubesTables.cginc"
+
+struct Triangle { float3 v0, v1, v2; };
+
+StructuredBuffer<float>          _DensityField;
+AppendStructuredBuffer<Triangle> _Triangles;
+RWStructuredBuffer<uint>         _IndirectArgs;
+
+int    _Resolution;     // 全体解像度
+int    _ChunkSize;      // チャンク1辺のセル数
+int    _ChunkOffsetX;   // チャンク原点ボクセル座標 X
+int    _ChunkOffsetY;   // チャンク原点ボクセル座標 Y
+int    _ChunkOffsetZ;   // チャンク原点ボクセル座標 Z
+float  _IsoLevel;
+float  _VoxelSize;      // ワールド空間での1ボクセルのサイズ
+float3 _BlockMin;       // ブロック左下前角（ワールド空間）
+
+// --- CopyCount 後の三角形数を ×3 して DrawProceduralIndirect の引数に変換 ---
+[numthreads(1,1,1)]
+void CSFillIndirectArgs(uint3 id : SV_DispatchThreadID)
+{
+    uint triCount    = _IndirectArgs[0];
+    _IndirectArgs[0] = triCount * 3u;
+    _IndirectArgs[1] = 1u;
+    _IndirectArgs[2] = 0u;
+    _IndirectArgs[3] = 0u;
+}
+
+float GetDensity(int x, int y, int z)
+{
+    x = clamp(x, 0, _Resolution - 1);
+    y = clamp(y, 0, _Resolution - 1);
+    z = clamp(z, 0, _Resolution - 1);
+    return _DensityField[x + y * _Resolution + z * _Resolution * _Resolution];
+}
+
+float3 VoxelToWorld(float3 v) { return _BlockMin + v * _VoxelSize; }
+
+float3 Interp(float3 p1, float3 p2, float d1, float d2)
+{
+    float t = (_IsoLevel - d1) / (d2 - d1 + 1e-6f);
+    return lerp(p1, p2, saturate(t));
+}
+
+// --- チャンク内セルを並列処理。グローバル座標に変換してから MC を実行 ---
+[numthreads(8,8,8)]
+void CSMarchingCubes(uint3 id : SV_DispatchThreadID)
+{
+    // チャンク範囲外チェック（ローカル座標）
+    if (id.x >= (uint)_ChunkSize || id.y >= (uint)_ChunkSize || id.z >= (uint)_ChunkSize)
+        return;
+
+    // グローバルボクセル座標
+    int x = (int)id.x + _ChunkOffsetX;
+    int y = (int)id.y + _ChunkOffsetY;
+    int z = (int)id.z + _ChunkOffsetZ;
+
+    // フィールド端のセルは両角の密度が取れないためスキップ
+    if (x >= _Resolution - 1 || y >= _Resolution - 1 || z >= _Resolution - 1)
+        return;
+
+    float d[8];
+    d[0] = GetDensity(x,   y,   z  );
+    d[1] = GetDensity(x+1, y,   z  );
+    d[2] = GetDensity(x+1, y+1, z  );
+    d[3] = GetDensity(x,   y+1, z  );
+    d[4] = GetDensity(x,   y,   z+1);
+    d[5] = GetDensity(x+1, y,   z+1);
+    d[6] = GetDensity(x+1, y+1, z+1);
+    d[7] = GetDensity(x,   y+1, z+1);
+
+    int cubeIndex = 0;
+    if (d[0] < _IsoLevel) cubeIndex |= 1;
+    if (d[1] < _IsoLevel) cubeIndex |= 2;
+    if (d[2] < _IsoLevel) cubeIndex |= 4;
+    if (d[3] < _IsoLevel) cubeIndex |= 8;
+    if (d[4] < _IsoLevel) cubeIndex |= 16;
+    if (d[5] < _IsoLevel) cubeIndex |= 32;
+    if (d[6] < _IsoLevel) cubeIndex |= 64;
+    if (d[7] < _IsoLevel) cubeIndex |= 128;
+
+    if (edgeTable[cubeIndex] == 0) return;
+
+    float3 p[8];
+    p[0] = VoxelToWorld(float3(x,   y,   z  ));
+    p[1] = VoxelToWorld(float3(x+1, y,   z  ));
+    p[2] = VoxelToWorld(float3(x+1, y+1, z  ));
+    p[3] = VoxelToWorld(float3(x,   y+1, z  ));
+    p[4] = VoxelToWorld(float3(x,   y,   z+1));
+    p[5] = VoxelToWorld(float3(x+1, y,   z+1));
+    p[6] = VoxelToWorld(float3(x+1, y+1, z+1));
+    p[7] = VoxelToWorld(float3(x,   y+1, z+1));
+
+    float3 e[12];
+    int edge = edgeTable[cubeIndex];
+    if (edge &    1) e[0]  = Interp(p[0], p[1], d[0], d[1]);
+    if (edge &    2) e[1]  = Interp(p[1], p[2], d[1], d[2]);
+    if (edge &    4) e[2]  = Interp(p[2], p[3], d[2], d[3]);
+    if (edge &    8) e[3]  = Interp(p[3], p[0], d[3], d[0]);
+    if (edge &   16) e[4]  = Interp(p[4], p[5], d[4], d[5]);
+    if (edge &   32) e[5]  = Interp(p[5], p[6], d[5], d[6]);
+    if (edge &   64) e[6]  = Interp(p[6], p[7], d[6], d[7]);
+    if (edge &  128) e[7]  = Interp(p[7], p[4], d[7], d[4]);
+    if (edge &  256) e[8]  = Interp(p[0], p[4], d[0], d[4]);
+    if (edge &  512) e[9]  = Interp(p[1], p[5], d[1], d[5]);
+    if (edge & 1024) e[10] = Interp(p[2], p[6], d[2], d[6]);
+    if (edge & 2048) e[11] = Interp(p[3], p[7], d[3], d[7]);
+
+    int triBase = cubeIndex * 16;
+    for (int i = 0; triTable[triBase + i] != -1; i += 3)
+    {
+        Triangle tri;
+        tri.v0 = e[triTable[triBase + i    ]];
+        tri.v1 = e[triTable[triBase + i + 1]];
+        tri.v2 = e[triTable[triBase + i + 2]];
+        _Triangles.Append(tri);
+    }
+}

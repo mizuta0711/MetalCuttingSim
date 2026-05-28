@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ボクセル掘削シミュレータ — デモ</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Anton&family=JetBrains+Mono:wght@400;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0c10;
+    --panel: #12161d;
+    --line: #1f2630;
+    --steel: #8b95a3;
+    --hot: #ff5b2e;
+    --hot-dim: #b33a1c;
+    --spark: #ffd23f;
+    --txt: #e6eaf0;
+    --txt-dim: #6b7585;
+    --grid: #1a2029;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--txt);
+    font-family: 'JetBrains Mono', monospace;
+    overflow: hidden;
+  }
+
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ---- Header ---- */
+  .header {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: 18px 26px;
+    display: flex; align-items: baseline; gap: 16px;
+    z-index: 10;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(10,12,16,0.9), transparent);
+  }
+  .title {
+    font-family: 'Anton', sans-serif;
+    font-size: 28px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--txt);
+  }
+  .title .ax { color: var(--hot); }
+  .subtitle {
+    font-size: 11px;
+    color: var(--txt-dim);
+    letter-spacing: 1px;
+  }
+
+  /* ---- HUD panels ---- */
+  .panel {
+    position: absolute;
+    background: rgba(18,22,29,0.82);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    backdrop-filter: blur(8px);
+    z-index: 10;
+  }
+
+  .readout {
+    top: 78px; left: 26px;
+    width: 232px;
+    padding: 16px 18px;
+  }
+  .readout h3, .controls h3 {
+    font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--hot); margin-bottom: 12px;
+    border-bottom: 1px solid var(--line); padding-bottom: 8px;
+  }
+  .stat { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .stat .label { font-size: 11px; color: var(--txt-dim); }
+  .stat .val { font-size: 16px; font-weight: 700; }
+  .stat .unit { font-size: 10px; color: var(--txt-dim); margin-left: 3px; }
+  .bar { height: 4px; background: var(--grid); border-radius: 2px; overflow: hidden; margin-top: 2px; }
+  .bar > i { display: block; height: 100%; width: 0%; background: var(--hot); transition: width .08s linear; }
+
+  .controls {
+    top: 78px; right: 26px;
+    width: 246px;
+    padding: 16px 18px;
+  }
+  .ctrl { margin-bottom: 16px; }
+  .ctrl label { font-size: 11px; color: var(--txt-dim); display: flex; justify-content: space-between; margin-bottom: 6px; }
+  .ctrl label b { color: var(--txt); font-weight: 700; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 4px; background: var(--grid); border-radius: 2px; outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--hot); cursor: pointer; border: 2px solid var(--bg);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--hot); cursor: pointer; border: 2px solid var(--bg);
+  }
+  .btn {
+    width: 100%; padding: 9px; margin-top: 4px;
+    background: transparent; border: 1px solid var(--line); border-radius: 3px;
+    color: var(--txt); font-family: inherit; font-size: 11px; letter-spacing: 1px;
+    text-transform: uppercase; cursor: pointer; transition: all .15s;
+  }
+  .btn:hover { border-color: var(--hot); color: var(--hot); }
+
+  .hint {
+    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    z-index: 10; font-size: 11px; color: var(--txt-dim); letter-spacing: 1px;
+    background: rgba(18,22,29,0.7); padding: 8px 18px; border-radius: 20px;
+    border: 1px solid var(--line);
+  }
+  .hint b { color: var(--hot); }
+  .hot-flag { color: var(--hot); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="header">
+  <div class="title">DRILL<span class="ax">·</span>AXIS</div>
+  <div class="subtitle">VOXEL METAL CUTTING — DEMO</div>
+</div>
+
+<div class="panel readout">
+  <h3>切削モニタ</h3>
+  <div class="stat"><span class="label">除去ボクセル</span><span><span class="val" id="removed">0</span><span class="unit">vox</span></span></div>
+  <div class="stat"><span class="label">残存率</span><span><span class="val" id="remain">100</span><span class="unit">%</span></span></div>
+  <div class="stat" style="margin-bottom:4px;"><span class="label">切削抵抗</span><span><span class="val" id="force">0</span><span class="unit">N</span></span></div>
+  <div class="bar"><i id="forceBar"></i></div>
+  <div class="stat" style="margin-top:12px;margin-bottom:4px;"><span class="label">主軸温度</span><span><span class="val" id="temp">20</span><span class="unit">°C</span></span></div>
+  <div class="bar"><i id="tempBar" style="background:var(--spark)"></i></div>
+  <div class="stat" style="margin-top:12px;"><span class="label">状態</span><span class="val" id="state" style="font-size:13px;color:var(--txt-dim)">待機</span></div>
+</div>
+
+<div class="panel controls">
+  <h3>工具パラメータ</h3>
+  <div class="ctrl">
+    <label>送り速度 <b><span id="feedV">1.0</span> mm/s</b></label>
+    <input type="range" id="feed" min="0.2" max="3" step="0.1" value="1.0">
+  </div>
+  <div class="ctrl">
+    <label>主軸回転数 <b><span id="rpmV">2000</span> rpm</b></label>
+    <input type="range" id="rpm" min="500" max="6000" step="100" value="2000">
+  </div>
+  <div class="ctrl">
+    <label>ドリル径 <b><span id="diaV">3</span> vox</b></label>
+    <input type="range" id="dia" min="1" max="6" step="1" value="3">
+  </div>
+  <button class="btn" id="reset">ワーク再生成 / RESET</button>
+</div>
+
+<div class="hint">マウス<b>ドラッグ</b>で視点回転 · <b>ホイール</b>でズーム · <b>スペース長押し</b>で掘削送り</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ---------------------------------------------------------------------------
+// シーン基本
+// ---------------------------------------------------------------------------
+const app = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0c10);
+scene.fog = new THREE.Fog(0x0a0c10, 40, 90);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+// ライティング
+scene.add(new THREE.AmbientLight(0x404a5a, 0.6));
+const key = new THREE.DirectionalLight(0xffffff, 1.4);
+key.position.set(18, 30, 20);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -25; key.shadow.camera.right = 25;
+key.shadow.camera.top = 25; key.shadow.camera.bottom = -25;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xff7a4d, 0.5);
+rim.position.set(-20, 10, -15);
+scene.add(rim);
+
+// 床グリッド
+const grid = new THREE.GridHelper(80, 40, 0x1f2630, 0x141a22);
+grid.position.y = -12;
+scene.add(grid);
+
+// ---------------------------------------------------------------------------
+// ボクセルワーク（金属ブロック）
+//   InstancedMesh で 1 cube = 1 voxel を描画。削れたら hidden に。
+// ---------------------------------------------------------------------------
+const GX = 20, GY = 16, GZ = 20;       // グリッド寸法
+const VOX = 1;                          // ボクセル一辺
+const TOTAL = GX*GY*GZ;
+const idx = (x,y,z) => (x*GY + y)*GZ + z;
+
+let active;                             // Uint8Array : 1=金属あり
+const dummy = new THREE.Object3D();
+
+const voxGeo = new THREE.BoxGeometry(VOX*0.98, VOX*0.98, VOX*0.98);
+const voxMat = new THREE.MeshStandardMaterial({
+  color: 0x8b95a3, metalness: 0.85, roughness: 0.38,
+});
+const mesh = new THREE.InstancedMesh(voxGeo, voxMat, TOTAL);
+mesh.castShadow = true; mesh.receiveShadow = true;
+mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(TOTAL*3), 3);
+scene.add(mesh);
+
+// グリッド中心をワールド原点に置くためのオフセット
+const offX = (GX-1)/2, offY = (GY-1)/2, offZ = (GZ-1)/2;
+const worldPos = (x,y,z) => new THREE.Vector3(
+  (x-offX)*VOX, (y-offY)*VOX, (z-offZ)*VOX
+);
+
+const HIDDEN = new THREE.Vector3(9999,9999,9999);
+const baseCol = new THREE.Color(0x8b95a3);
+const hotCol  = new THREE.Color(0xff5b2e);
+
+function buildWork() {
+  active = new Uint8Array(TOTAL).fill(1);
+  for (let x=0;x<GX;x++) for (let y=0;y<GY;y++) for (let z=0;z<GZ;z++) {
+    const i = idx(x,y,z);
+    const p = worldPos(x,y,z);
+    dummy.position.copy(p);
+    dummy.updateMatrix();
+    mesh.setMatrixAt(i, dummy.matrix);
+    // わずかな色ムラで金属感を出す
+    const n = 0.88 + Math.random()*0.24;
+    mesh.setColorAt(i, baseCol.clone().multiplyScalar(n));
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.instanceColor.needsUpdate = true;
+  removedCount = 0;
+}
+let removedCount = 0;
+buildWork();
+
+// ---------------------------------------------------------------------------
+// ドリル（工具）
+// ---------------------------------------------------------------------------
+const drill = new THREE.Group();
+const bitMat = new THREE.MeshStandardMaterial({ color:0x2a2f38, metalness:0.95, roughness:0.25 });
+const flute = new THREE.Mesh(new THREE.CylinderGeometry(1.4,1.4,10,24), bitMat);
+const tip   = new THREE.Mesh(new THREE.ConeGeometry(1.4,2.4,24), bitMat);
+tip.position.y = -6.2;
+const shank = new THREE.Mesh(new THREE.CylinderGeometry(1.6,1.6,4,24),
+              new THREE.MeshStandardMaterial({color:0x444b56, metalness:0.9, roughness:0.4}));
+shank.position.y = 6;
+drill.add(flute, tip, shank);
+drill.position.set(0, 18, 0);          // 上空からワークへ降下
+scene.add(drill);
+
+// 火花パーティクル
+const SPK = 120;
+const spkGeo = new THREE.BufferGeometry();
+const spkPos = new Float32Array(SPK*3);
+const spkVel = new Float32Array(SPK*3);
+const spkLife = new Float32Array(SPK);
+spkGeo.setAttribute('position', new THREE.BufferAttribute(spkPos,3));
+const spkMat = new THREE.PointsMaterial({ color:0xffd23f, size:0.4, transparent:true, opacity:0.9 });
+const sparks = new THREE.Points(spkGeo, spkMat);
+scene.add(sparks);
+function emitSpark(p){
+  for(let k=0;k<3;k++){
+    const i = (Math.random()*SPK)|0;
+    spkPos[i*3]=p.x; spkPos[i*3+1]=p.y; spkPos[i*3+2]=p.z;
+    spkVel[i*3]=(Math.random()-0.5)*0.6;
+    spkVel[i*3+1]=Math.random()*0.5+0.2;
+    spkVel[i*3+2]=(Math.random()-0.5)*0.6;
+    spkLife[i]=1;
+  }
+}
+function stepSparks(){
+  for(let i=0;i<SPK;i++){
+    if(spkLife[i]>0){
+      spkLife[i]-=0.04;
+      spkPos[i*3]+=spkVel[i*3];
+      spkPos[i*3+1]+=spkVel[i*3+1];
+      spkPos[i*3+2]+=spkVel[i*3+2];
+      spkVel[i*3+1]-=0.03;
+      if(spkLife[i]<=0){ spkPos[i*3+1]=9999; }
+    }
+  }
+  spkGeo.attributes.position.needsUpdate=true;
+}
+
+// ---------------------------------------------------------------------------
+// パラメータ & 物理（簡易切削モデル）
+//   切削抵抗 F = Kc * 切込み面積 * 送り係数
+//   温度 T : 抵抗と回転数で上昇、空転時に放冷
+// ---------------------------------------------------------------------------
+const P = { feed:1.0, rpm:2000, dia:3 };
+let force = 0, temp = 20;
+
+const ui = {
+  feed:document.getElementById('feed'), rpm:document.getElementById('rpm'), dia:document.getElementById('dia'),
+  feedV:document.getElementById('feedV'), rpmV:document.getElementById('rpmV'), diaV:document.getElementById('diaV'),
+  removed:document.getElementById('removed'), remain:document.getElementById('remain'),
+  force:document.getElementById('force'), forceBar:document.getElementById('forceBar'),
+  temp:document.getElementById('temp'), tempBar:document.getElementById('tempBar'),
+  state:document.getElementById('state'),
+};
+ui.feed.oninput = e => { P.feed=+e.target.value; ui.feedV.textContent=P.feed.toFixed(1); };
+ui.rpm.oninput  = e => { P.rpm=+e.target.value;  ui.rpmV.textContent=P.rpm; };
+ui.dia.oninput  = e => { P.dia=+e.target.value;  ui.diaV.textContent=P.dia; };
+document.getElementById('reset').onclick = () => { buildWork(); drill.position.set(0,18,0); temp=20; };
+
+// ---------------------------------------------------------------------------
+// 掘削処理 : ドリル先端まわりのボクセルを除去
+// ---------------------------------------------------------------------------
+let drilling = false;
+addEventListener('keydown', e => { if(e.code==='Space'){ drilling=true; e.preventDefault(); }});
+addEventListener('keyup',   e => { if(e.code==='Space'){ drilling=false; }});
+
+function gridCoord(v){
+  return [Math.round(v.x/VOX+offX), Math.round(v.y/VOX+offY), Math.round(v.z/VOX+offZ)];
+}
+
+function cut(){
+  // ドリル先端のワールド座標
+  const tipPos = new THREE.Vector3(drill.position.x, drill.position.y-7.2, drill.position.z);
+  const [cx,cy,cz] = gridCoord(tipPos);
+  const r = P.dia/2;
+  let hit = 0;
+  for(let dx=-3;dx<=3;dx++) for(let dy=-3;dy<=3;dy++) for(let dz=-3;dz<=3;dz++){
+    const x=cx+dx, y=cy+dy, z=cz+dz;
+    if(x<0||x>=GX||y<0||y>=GY||z<0||z>=GZ) continue;
+    if(Math.sqrt(dx*dx+dz*dz) > r || dy>1) continue;   // 円柱状に削る
+    const i = idx(x,y,z);
+    if(active[i]===1){
+      active[i]=0;
+      dummy.position.copy(HIDDEN); dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+      removedCount++; hit++;
+    }
+  }
+  if(hit>0){ mesh.instanceMatrix.needsUpdate=true; emitSpark(tipPos); }
+  return hit;
+}
+
+// ---------------------------------------------------------------------------
+// カメラ操作（簡易オービット）
+// ---------------------------------------------------------------------------
+let camR=42, camTheta=0.7, camPhi=1.05, dragging=false, lx=0, ly=0;
+function updateCam(){
+  camera.position.set(
+    camR*Math.sin(camPhi)*Math.cos(camTheta),
+    camR*Math.cos(camPhi),
+    camR*Math.sin(camPhi)*Math.sin(camTheta)
+  );
+  camera.lookAt(0,0,0);
+}
+renderer.domElement.addEventListener('mousedown', e=>{dragging=true;lx=e.clientX;ly=e.clientY;});
+addEventListener('mouseup', ()=>dragging=false);
+addEventListener('mousemove', e=>{
+  if(!dragging) return;
+  camTheta -= (e.clientX-lx)*0.008;
+  camPhi   = Math.max(0.2, Math.min(2.6, camPhi-(e.clientY-ly)*0.008));
+  lx=e.clientX; ly=e.clientY;
+});
+renderer.domElement.addEventListener('wheel', e=>{
+  camR = Math.max(20, Math.min(80, camR + e.deltaY*0.03)); e.preventDefault();
+}, {passive:false});
+
+// ---------------------------------------------------------------------------
+// メインループ
+// ---------------------------------------------------------------------------
+let spin=0;
+function animate(){
+  requestAnimationFrame(animate);
+
+  spin += P.rpm/60/60 * Math.PI*2;   // 見た目用の回転
+  flute.rotation.y = spin; tip.rotation.y = spin; shank.rotation.y = spin;
+
+  // 先端がワーク内にあるか
+  const tipY = drill.position.y - 7.2;
+  const topOfWork = (GY-1-offY)*VOX;
+  const inContact = drilling && tipY <= topOfWork + 1;
+
+  if(drilling){
+    // 送り：先端が床に達するまで降下
+    if(drill.position.y > -6){
+      drill.position.y -= P.feed*0.12;
+    }
+    const hit = inContact ? cut() : 0;
+
+    // 切削抵抗モデル（簡易）：除去量×送り÷回転 に比例
+    const target = inContact
+      ? (hit*40 + P.feed*180) * (2500/P.rpm)
+      : 0;
+    force += (target-force)*0.15;
+    // 発熱：抵抗と回転に比例して上昇
+    temp += (force*0.0009 + P.rpm*0.00004) * (inContact?1:0);
+  } else {
+    force += (0-force)*0.12;
+  }
+  // 放冷
+  temp += (20-temp)*0.01;
+  temp = Math.min(temp, 480);
+
+  stepSparks();
+  // 高温時はパーティクルを赤く
+  spkMat.color.setHSL(temp>200?0.02:0.13, 1, 0.55);
+
+  // HUD更新
+  ui.removed.textContent = removedCount;
+  ui.remain.textContent = (100 - removedCount/TOTAL*100).toFixed(1);
+  ui.force.textContent = Math.round(force);
+  ui.forceBar.style.width = Math.min(100, force/12) + '%';
+  ui.temp.textContent = Math.round(temp);
+  ui.tempBar.style.width = Math.min(100, (temp-20)/4.6) + '%';
+  if(inContact){ ui.state.textContent='切削中'; ui.state.className='val hot-flag'; }
+  else if(drilling){ ui.state.textContent='送り中'; ui.state.style.color='#e6eaf0'; ui.state.className='val'; }
+  else { ui.state.textContent='待機'; ui.state.style.color='#6b7585'; ui.state.className='val'; }
+  ui.forceBar.style.background = force>700 ? '#ff5b2e' : '#ff5b2e';
+
+  updateCam();
+  renderer.render(scene, camera);
+}
+updateCam();
+animate();
+
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
